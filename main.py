@@ -1,4 +1,4 @@
-import simpy
+import simpy.rt
 import pygame
 import threading
 import time
@@ -98,7 +98,7 @@ def run_simulation(state):
     """
     try:
         # factor=1.0 means 1 unit of sim time = 1 second of real time
-        env = simpy.rt.RealtimeSimulation(factor=1.0, strict=False)
+        env = simpy.rt.RealtimeEnvironment(factor=1.0, strict=False)
         env.process(vehicle_process(env, state))
         # This will run as long as the process yields events,
         # or until env.stop() is called (which we don't do here,
