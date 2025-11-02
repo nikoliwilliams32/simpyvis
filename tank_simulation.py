@@ -4,7 +4,52 @@ import threading
 import time
 import sys
 import math
+import os
+import git
 from dataclasses import dataclass
+from git.exc import InvalidGitRepositoryError, GitCommandError
+
+# Git update check settings
+UPDATE_CHECK_INTERVAL = 300  # Check for updates every 5 minutes
+
+def check_for_updates():
+    """
+    Check if there are any updates in the Git repository.
+    Returns a tuple (needs_update, error_message).
+    """
+    try:
+        # Get the directory containing the script
+        if getattr(sys, 'frozen', False):
+            # If running as a PyInstaller bundle
+            script_dir = os.path.dirname(sys.executable)
+        else:
+            # If running as a normal Python script
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # Initialize repository
+        repo = git.Repo(script_dir)
+        
+        # Fetch from remote
+        repo.remotes.origin.fetch()
+        
+        # Get current branch
+        current = repo.active_branch
+        
+        # Get tracking branch
+        tracking = current.tracking_branch()
+        
+        if not tracking:
+            return False, "No tracking branch set up"
+            
+        # Check if we're behind the remote
+        commits_behind = sum(1 for c in repo.iter_commits(f'{current.name}..{tracking.name}'))
+        
+        return commits_behind > 0, None
+        
+    except (InvalidGitRepositoryError, GitCommandError) as e:
+        return False, f"Git error: {str(e)}"
+    except Exception as e:
+        return False, f"Unexpected error: {str(e)}"
 
 # --- Pygame Settings ---
 SCREEN_WIDTH = 800
@@ -34,6 +79,9 @@ class SimulationState:
         self.message = "Initializing..."
         self.running = True
         self.factor = 1.0  # Simulation speed factor
+        self.last_update_check = 0  # Last time we checked for updates
+        self.update_available = False  # Whether an update is available
+        self.update_error = None  # Any error message from update checking
 
     def update_volume(self, volume):
         """Thread-safe volume update"""
@@ -190,6 +238,16 @@ def draw_tank(surface, volume, max_volume):
         pygame.draw.rect(surface, WATER_COLOR, water_rect)
 
 
+def check_updates_if_needed(state):
+    """Check for updates if enough time has passed since last check"""
+    current_time = time.time()
+    with state.lock:
+        if current_time - state.last_update_check >= UPDATE_CHECK_INTERVAL:
+            state.last_update_check = current_time
+            needs_update, error = check_for_updates()
+            state.update_available = needs_update
+            state.update_error = error
+
 def main():
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -197,6 +255,14 @@ def main():
     clock = pygame.time.Clock()
     font = pygame.font.Font(None, 30)
     small_font = pygame.font.Font(None, 24)
+    
+    # Perform initial update check
+    initial_update_check, error = check_for_updates()
+    if initial_update_check:
+        if pygame.display.get_init():
+            pygame.quit()
+        print("An update is available. Please close the application and pull the latest changes.")
+        sys.exit(0)
 
     # Create shared state
     state = SimulationState()
@@ -273,8 +339,17 @@ def main():
         # Drawing
         screen.fill(BG_COLOR)
 
+        # Check for updates
+        check_updates_if_needed(state)
+        
         # Draw tank
         draw_tank(screen, current_volume, MAX_VOLUME)
+
+        # Draw update message if available
+        if state.update_available:
+            update_text = "Update available! Please close and update."
+            update_surface = font.render(update_text, True, (255, 0, 0))
+            screen.blit(update_surface, (10, SCREEN_HEIGHT - 30))
 
         # Draw sliders
         sliders["speed"]["rect"] = draw_slider(
